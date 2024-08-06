@@ -568,7 +568,17 @@ def cycle_summary(df, current_label=None):
     Returns:
         pandas.DataFrame: The summary DataFrame with the calculated values.
     """
-    df['full cycle'] = (df['half cycle']/2).apply(np.ceil)
+    
+    # Generate full cycle numbering
+    # 1 full cycle is charge then discharge; code considers which the test begins with
+    # Find the 'state' of the first data point in half cycle 1
+    initial_state = df[df['half cycle'] == 1].iloc[0].state
+    if initial_state == 1: # Cell starts in discharge
+        df['full cycle'] = (df['half cycle']/2).apply(np.floor)
+    elif initial_state == 0: # Cell starts in charge
+        df['full cycle'] = (df['half cycle']/2).apply(np.ceil)
+    else:
+        raise Exception('Unexpected state in the first data point of half cycle 1.')
 
     # Figuring out which column is current
     if current_label is not None:
