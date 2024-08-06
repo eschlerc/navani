@@ -608,7 +608,7 @@ def cycle_summary(df, current_label=None):
     cha_mask = df['state'] == 0
     cha_index = df[cha_mask]['full cycle'].unique()
     summary_df.loc[cha_index, 'Charge Capacity'] = df[cha_mask].groupby('full cycle')['Capacity'].max()
-    summary_df['CE'] = summary_df['Charge Capacity']/summary_df['Discharge Capacity']
+    summary_df['CE'] = summary_df['Discharge Capacity']/summary_df['Charge Capacity']
 
 
     if 'Specific Capacity' in df.columns:
