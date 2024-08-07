@@ -151,8 +151,17 @@ def echem_file_loader(filepath, mass=None, area=None):
         raise RuntimeError("Filetype {extension=} not recognised.")
 
     # Adding a full cycle column
+    # 1 full cycle is charge then discharge; code considers which the test begins with
     if "half cycle" in df.columns:
-        df['full cycle'] = (df['half cycle']/2).apply(np.ceil)
+        # Find the 'state' of the first data point in half cycle 1
+        initial_state = df[df['half cycle'] == 1].iloc[0].state
+        
+        if initial_state == 1: # Cell starts in discharge
+            df['full cycle'] = (df['half cycle']/2).apply(np.floor)
+        elif initial_state == 0: # Cell starts in charge
+            df['full cycle'] = (df['half cycle']/2).apply(np.ceil)
+        else:
+            raise Exception('Unexpected state in the first data point of half cycle 1.')
 
     # Adding specific capacity and current density columns if mass and area are provided
     if mass:
@@ -217,7 +226,6 @@ def arbin_res(df):
             pass
 
     return df
-
 
 def biologic_processing(df):
     """
@@ -495,7 +503,6 @@ def neware_reader(filename: Union[str, Path]) -> pd.DataFrame:
     df.loc[not_rest_idx, 'cycle change'] = df.loc[not_rest_idx, 'state'].ne(df.loc[not_rest_idx, 'state'].shift())
     return df
 
-
 def dqdv_single_cycle(capacity, voltage, 
                     polynomial_spline=3, s_spline=1e-5,
                     polyorder_1 = 5, window_size_1=101,
@@ -569,19 +576,6 @@ def cycle_summary(df, current_label=None):
         pandas.DataFrame: The summary DataFrame with the calculated values.
     """
     
-    # Generate full cycle numbering
-    # 1 full cycle is charge then discharge; code considers which the test begins with
-    # Find the 'state' of the first data point in half cycle 1
-    global initial_state
-    initial_state = df[df['half cycle'] == 1].iloc[0].state
-    
-    if initial_state == 1: # Cell starts in discharge
-        df['full cycle'] = (df['half cycle']/2).apply(np.floor)
-    elif initial_state == 0: # Cell starts in charge
-        df['full cycle'] = (df['half cycle']/2).apply(np.ceil)
-    else:
-        raise Exception('Unexpected state in the first data point of half cycle 1.')
-
     # Figuring out which column is current
     if current_label is not None:
         df[current_label] = df[current_label].astype(float)
@@ -629,29 +623,30 @@ def cycle_summary(df, current_label=None):
     for cycle in dis_cycles:
         mask = df['half cycle'] == cycle
         avg_vol = average_voltage(df['Capacity'][mask], df['Voltage'][mask])
-
-        summary_df.loc[np.ceil(cycle/2), 'Average Discharge Voltage'] = avg_vol
+        # Add an entry to the summary for each full cycle
+        summary_df.loc[df['full cycle'][mask].iloc[0], 'Average Discharge Voltage'] = avg_vol
 
     cha_cycles = df.loc[df.index[cha_mask]]['half cycle'].unique()
     for cycle in cha_cycles:
         mask = df['half cycle'] == cycle
         avg_vol = average_voltage(df['Capacity'][mask], df['Voltage'][mask])
-        summary_df.loc[np.ceil(cycle/2), 'Average Charge Voltage'] = avg_vol
+        # Add an entry to the summary for each full cycle
+        summary_df.loc[df['full cycle'][mask].iloc[0], 'Average Charge Voltage'] = avg_vol
     return summary_df
 
-def halfcycles_from_cycle(cycle, discharge_first):
+def halfcycles_from_cycle(df, cycle):
     """
-    Function for determining which half cycles correspond to a given full cycle, accounting for whether test begins with discharge or charge.
+    Function for determining which half cycles correspond to a given full cycle.
 
     Args:
         cycle (int): Full cycle number
-        discharge_first (bool): Whether test begins with a discharge step
     
     Returns:
         halfcycles (list of ints): Half cycles corresponding to full cycle
     """
     try:
-        halfcycles = [int((cycle*2)-1+discharge_first), int((cycle*2)+discharge_first)]
+        mask = df['full cycle'] == cycle
+        halfcycles = list(df['half cycle'][mask].unique())
         return halfcycles
     except TypeError:
         print("Invalid type for cycle number.")
@@ -659,20 +654,6 @@ def halfcycles_from_cycle(cycle, discharge_first):
 """
 PLOTTING
 """
-
-# def ax_from_cycle(ax, df, cycle, count=0):
-#     halfcycles = [cycle*2-1-initial_state, cycle*2-initial_state]
-#     for halfcycle in halfcycles:
-#         mask = df['half cycle'] == halfcycle
-#         # Making sure halfcycle exists within the data
-#         if sum(mask) > 0:
-#             ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(count))
-#     # TODO
-#     #     # Give a warning if plotting is requested on a cycle beyond the end of the test
-#     #     elif halfcycle > df['half cycle'].max():
-#     #         warning_buffer = "One or more half cycles in cycle", cycle, "is outside the data range"
-#     # if warning_buffer:
-#     #     print(warning_buffer)
 
 def charge_discharge_plot(df, cycles, colormap=None):
     """
@@ -697,7 +678,7 @@ def charge_discharge_plot(df, cycles, colormap=None):
         iter(cycles)
 
     except TypeError: # Happens if full_cycle is an int
-        halfcycles = halfcycles_from_cycle(cycles, initial_state)
+        halfcycles = halfcycles_from_cycle(df, cycles)
         for halfcycle in halfcycles:
             mask = df['half cycle'] == halfcycle
             # Making sure half cycle exists within the data
@@ -718,7 +699,7 @@ def charge_discharge_plot(df, cycles, colormap=None):
 
     cm = plt.get_cmap(colormap)
     for count, cycle in enumerate(cycles):
-        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        halfcycles = halfcycles_from_cycle(df, cycle)
         for halfcycle in halfcycles:
             mask = df['half cycle'] == halfcycle
             # Making sure half cycle exists within the data
@@ -763,7 +744,7 @@ def multi_cycle_plot(df, cycles, colormap='viridis'):
     sm = plt.cm.ScalarMappable(cmap=cm, norm=norm)
 
     for cycle in cycles:
-        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        halfcycles = halfcycles_from_cycle(df, cycle)
         for halfcycle in halfcycles:
             mask = df['half cycle'] == halfcycle
             ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(norm(cycle)))
@@ -808,13 +789,13 @@ def multi_dqdv_plot(df, cycles, colormap='viridis',
     import matplotlib.cm as cm
     from matplotlib.colors import Normalize
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots() 
     cm = plt.get_cmap(colormap)
     norm = Normalize(vmin=int(min(cycles)), vmax=int(max(cycles)))
     sm = plt.cm.ScalarMappable(cmap=cm, norm=norm)
 
     for cycle in cycles:
-        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        halfcycles = halfcycles_from_cycle(df, cycle)
         for halfcycle in halfcycles:
             df_cycle = df[df['half cycle'] == halfcycle]
             voltage, dqdv, _ = dqdv_single_cycle(df_cycle[capacity_label],
