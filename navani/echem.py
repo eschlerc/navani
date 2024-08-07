@@ -572,7 +572,9 @@ def cycle_summary(df, current_label=None):
     # Generate full cycle numbering
     # 1 full cycle is charge then discharge; code considers which the test begins with
     # Find the 'state' of the first data point in half cycle 1
+    global initial_state
     initial_state = df[df['half cycle'] == 1].iloc[0].state
+    
     if initial_state == 1: # Cell starts in discharge
         df['full cycle'] = (df['half cycle']/2).apply(np.floor)
     elif initial_state == 0: # Cell starts in charge
@@ -637,11 +639,42 @@ def cycle_summary(df, current_label=None):
         summary_df.loc[np.ceil(cycle/2), 'Average Charge Voltage'] = avg_vol
     return summary_df
 
+def halfcycles_from_cycle(cycle, discharge_first):
+    """
+    Function for determining which half cycles correspond to a given full cycle, accounting for whether test begins with discharge or charge.
+
+    Args:
+        cycle (int): Full cycle number
+        discharge_first (bool): Whether test begins with a discharge step
+    
+    Returns:
+        halfcycles (list of ints): Half cycles corresponding to full cycle
+    """
+    try:
+        halfcycles = [int((cycle*2)-1+discharge_first), int((cycle*2)+discharge_first)]
+        return halfcycles
+    except TypeError:
+        print("Invalid type for cycle number.")
+
 """
 PLOTTING
 """
 
-def charge_discharge_plot(df, full_cycle, colormap=None):
+# def ax_from_cycle(ax, df, cycle, count=0):
+#     halfcycles = [cycle*2-1-initial_state, cycle*2-initial_state]
+#     for halfcycle in halfcycles:
+#         mask = df['half cycle'] == halfcycle
+#         # Making sure halfcycle exists within the data
+#         if sum(mask) > 0:
+#             ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(count))
+#     # TODO
+#     #     # Give a warning if plotting is requested on a cycle beyond the end of the test
+#     #     elif halfcycle > df['half cycle'].max():
+#     #         warning_buffer = "One or more half cycles in cycle", cycle, "is outside the data range"
+#     # if warning_buffer:
+#     #     print(warning_buffer)
+
+def charge_discharge_plot(df, cycles, colormap=None):
     """
     Function for plotting individual or multi but discrete charge discharge cycles
 
@@ -661,13 +694,13 @@ def charge_discharge_plot(df, full_cycle, colormap=None):
     fig, ax = plt.subplots()
 
     try:
-        iter(full_cycle)
+        iter(cycles)
 
-    except TypeError:
-        cycles = [full_cycle*2 -1, full_cycle*2]
-        for cycle in cycles:
-            mask = df['half cycle'] == cycle
-            # Making sure cycle exists within the data
+    except TypeError: # Happens if full_cycle is an int
+        halfcycles = halfcycles_from_cycle(cycles, initial_state)
+        for halfcycle in halfcycles:
+            mask = df['half cycle'] == halfcycle
+            # Making sure half cycle exists within the data
             if sum(mask) > 0:
                 ax.plot(df['Capacity'][mask], df['Voltage'][mask])
 
@@ -676,40 +709,39 @@ def charge_discharge_plot(df, full_cycle, colormap=None):
         return fig, ax
 
     if not colormap:
-        if len(full_cycle) < 11:
+        if len(cycles) < 11:
             colormap = 'tab10'
-        elif len(full_cycle) < 21:
+        elif len(cycles) < 21:
             colormap = 'tab20'
         else:
             raise ValueError("Too many cycles for default colormaps. Use multi_cycle_plot instead")
 
     cm = plt.get_cmap(colormap)
-    for count, full_cycle_number in enumerate(full_cycle):
-        cycles = [full_cycle_number*2 -1, full_cycle_number*2]
-        for cycle in cycles:
-            mask = df['half cycle'] == cycle
-            # Making sure cycle exists within the data
+    for count, cycle in enumerate(cycles):
+        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        for halfcycle in halfcycles:
+            mask = df['half cycle'] == halfcycle
+            # Making sure half cycle exists within the data
             if sum(mask) > 0:
                 ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(count))
 
     from matplotlib.lines import Line2D
-    custom_lines = [Line2D([0], [0], color=cm(count), lw=2) for count, _ in enumerate(full_cycle)]
+    custom_lines = [Line2D([0], [0], color=cm(count), lw=2) for count, _ in enumerate(cycles)]
 
-    ax.legend(custom_lines, [f'Cycle {i}' for i in full_cycle])
+    ax.legend(custom_lines, [f'Cycle {i}' for i in cycles])
     ax.set_xlabel('Capacity / mAh')
     ax.set_ylabel('Voltage / V')
     return fig, ax
 
-
 def multi_cycle_plot(df, cycles, colormap='viridis'):
     """
-    Function for plotting continuously coloured cycles (useful for large numbers). The cycle numbers correspond to half cycles.
+    Function for plotting continuously coloured cycles (useful for large numbers).
 
     Parameters:
     - df: DataFrame
         The input DataFrame containing the data to be plotted.
     - cycles: list or array-like
-        A list of cycle numbers to be plotted, these are half cycles.
+        A list of full cycle numbers to be plotted.
     - colormap: str, optional
         The name of the colormap to be used for coloring the cycles. Default is 'viridis'.
 
@@ -727,19 +759,20 @@ def multi_cycle_plot(df, cycles, colormap='viridis'):
 
     fig, ax = plt.subplots()
     cm = plt.get_cmap(colormap)
-    norm = Normalize(vmin=int(np.ceil(min(cycles)/2)), vmax=int(np.ceil(max(cycles)/2)))
+    norm = Normalize(vmin=int(min(cycles)), vmax=int(max(cycles)))
     sm = plt.cm.ScalarMappable(cmap=cm, norm=norm)
 
     for cycle in cycles:
-        mask = df['half cycle'] == cycle
-        ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(norm(np.ceil(cycle/2))))
+        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        for halfcycle in halfcycles:
+            mask = df['half cycle'] == halfcycle
+            ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(norm(cycle)))
 
-    cbar = fig.colorbar(sm)
+    cbar = fig.colorbar(sm, ax=plt.gca())
     cbar.set_label('Cycle', rotation=270, labelpad=10)
     ax.set_ylabel('Voltage / V')
     ax.set_xlabel('Capacity / mAh')
     return fig, ax
-
 
 def multi_dqdv_plot(df, cycles, colormap='viridis', 
     capacity_label='Capacity', 
@@ -749,12 +782,12 @@ def multi_dqdv_plot(df, cycles, colormap='viridis',
     polyorder_2 = 5, window_size_2=1001,
     final_smooth=True):
     """
-    Plot multiple dQ/dV cycles on the same plot with a colormap. Cycles correspond to half cycles. 
+    Plot multiple dQ/dV cycles on the same plot with a colormap.
     Uses the internal dqdv_single_cycle function to calculate the dQ/dV curves.
 
     Parameters:
     - df: DataFrame containing the data.
-    - cycles: List or array-like object of cycle numbers (half cycles) to plot.
+    - cycles: List or array-like object of cycle numbers to plot.
     - colormap: Name of the colormap to use (default: 'viridis').
     - capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
     - voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
@@ -777,25 +810,85 @@ def multi_dqdv_plot(df, cycles, colormap='viridis',
 
     fig, ax = plt.subplots()
     cm = plt.get_cmap(colormap)
-    norm = Normalize(vmin=int(np.ceil(min(cycles)/2)), vmax=int(np.ceil(max(cycles)/2)))
+    norm = Normalize(vmin=int(min(cycles)), vmax=int(max(cycles)))
     sm = plt.cm.ScalarMappable(cmap=cm, norm=norm)
 
     for cycle in cycles:
-        df_cycle = df[df['half cycle'] == cycle]
-        voltage, dqdv, _ = dqdv_single_cycle(df_cycle[capacity_label],
-                                    df_cycle[voltage_label], 
-                                    window_size_1=window_size_1,
-                                    polyorder_1=polyorder_1,
-                                    polynomial_spline=polynomial_spline,
-                                    s_spline=s_spline,
-                                    window_size_2=window_size_2,
-                                    polyorder_2=polyorder_2,
-                                    final_smooth=final_smooth)
+        halfcycles = halfcycles_from_cycle(cycle, initial_state)
+        for halfcycle in halfcycles:
+            df_cycle = df[df['half cycle'] == halfcycle]
+            voltage, dqdv, _ = dqdv_single_cycle(df_cycle[capacity_label],
+                                        df_cycle[voltage_label], 
+                                        window_size_1=window_size_1,
+                                        polyorder_1=polyorder_1,
+                                        polynomial_spline=polynomial_spline,
+                                        s_spline=s_spline,
+                                        window_size_2=window_size_2,
+                                        polyorder_2=polyorder_2,
+                                        final_smooth=final_smooth)
+            ax.plot(voltage, dqdv, color=cm(norm(cycle)))
 
-        ax.plot(voltage, dqdv, color=cm(norm(np.ceil(cycle/2))))
-
-    cbar = fig.colorbar(sm)
+    cbar = fig.colorbar(sm, ax=plt.gca())
     cbar.set_label('Cycle', rotation=270, labelpad=10)
     ax.set_xlabel('Voltage / V')
     ax.set_ylabel('dQ/dV / $mAhV^{-1}$')
     return fig, ax
+
+# def multi_dqdv_plot(df, cycles, colormap='viridis', 
+#     capacity_label='Capacity', 
+#     voltage_label='Voltage',
+#     polynomial_spline=3, s_spline=1e-5,
+#     polyorder_1 = 5, window_size_1=101,
+#     polyorder_2 = 5, window_size_2=1001,
+#     final_smooth=True):
+#     """
+#     Plot multiple dQ/dV cycles on the same plot with a colormap. Cycles correspond to half cycles. 
+#     Uses the internal dqdv_single_cycle function to calculate the dQ/dV curves.
+
+#     Parameters:
+#     - df: DataFrame containing the data.
+#     - cycles: List or array-like object of cycle numbers (half cycles) to plot.
+#     - colormap: Name of the colormap to use (default: 'viridis').
+#     - capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
+#     - voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
+#     - polynomial_spline (int, optional): Order of the spline interpolation for the capacity-voltage curve. Defaults to 3. Best results use odd numbers.
+#     - s_spline (float, optional): Smoothing factor for the spline interpolation. Defaults to 1e-5.
+#     - polyorder_1 (int, optional): Order of the polynomial for the first smoothing filter (Before spline fitting). Defaults to 5. Best results use odd numbers.
+#     - window_size_1 (int, optional): Size of the window for the first smoothing filter. (Before spline fitting). Defaults to 101. Must be odd.
+#     - polyorder_2 (int, optional): Order of the polynomial for the second optional smoothing filter. Defaults to 5. (After spline fitting and differentiation). Best results use odd numbers.
+#     - window_size_2 (int, optional): Size of the window for the second optional smoothing filter. Defaults to 1001. (After spline fitting and differentiation). Must be odd.
+#     - final_smooth (bool, optional): Whether to apply final smoothing to the dq/dv curve. Defaults to True.
+
+#     Returns:
+#     - fig: The matplotlib figure object.
+#     - ax: The matplotlib axes object.
+
+#     """
+#     import matplotlib.pyplot as plt
+#     import matplotlib.cm as cm
+#     from matplotlib.colors import Normalize
+
+#     fig, ax = plt.subplots()
+#     cm = plt.get_cmap(colormap)
+#     norm = Normalize(vmin=int(np.ceil(min(cycles)/2)), vmax=int(np.ceil(max(cycles)/2)))
+#     sm = plt.cm.ScalarMappable(cmap=cm, norm=norm)
+
+#     for cycle in cycles:
+#         df_cycle = df[df['half cycle'] == cycle]
+#         voltage, dqdv, _ = dqdv_single_cycle(df_cycle[capacity_label],
+#                                     df_cycle[voltage_label], 
+#                                     window_size_1=window_size_1,
+#                                     polyorder_1=polyorder_1,
+#                                     polynomial_spline=polynomial_spline,
+#                                     s_spline=s_spline,
+#                                     window_size_2=window_size_2,
+#                                     polyorder_2=polyorder_2,
+#                                     final_smooth=final_smooth)
+
+#         ax.plot(voltage, dqdv, color=cm(norm(np.ceil(cycle/2))))
+
+#     cbar = fig.colorbar(sm)
+#     cbar.set_label('Cycle', rotation=270, labelpad=10)
+#     ax.set_xlabel('Voltage / V')
+#     ax.set_ylabel('dQ/dV / $mAhV^{-1}$')
+#     return fig, ax
