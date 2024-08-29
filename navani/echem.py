@@ -21,6 +21,18 @@ mpr_col_dict = {'Voltage': 'Ewe/V',
 
 current_labels = ['Current', 'Current(A)', 'I /mA', 'Current/mA', 'I/mA', '<I>/mA']
 
+def multi_file_biologic(filepath, time_offset=0, capacity_offset=0):
+    """
+    
+    """
+    gal_file = MPRfile(os.path.join(filepath))
+    df = pd.DataFrame(data=gal_file.data)
+
+    # Offset time and/or capacity to make stitched files continuous
+    df['time/s'] += time_offset
+    df['Q charge/discharge/mA.h'] += capacity_offset
+
+    return df
 
 def echem_file_loader(filepath, mass=None, area=None):
     """
@@ -35,9 +47,11 @@ def echem_file_loader(filepath, mass=None, area=None):
     - "Voltage": The voltage of the cell
     - "Current": The current of the cell - In general this will be in mA - however it depends what unit the original file is in
     - "Specific Capacity": The capacity of the cell divided by the mass of the cell if mass provided
-    - "Specific Capacity (Area)": The capacity of the cell divided by the area of the cell if area provided
-    - "Current Density": The current of the cell divided by the area of the cell is area provided
-    - "Specific Current": The current of the cell divided by the mass of the cell
+    - "Areal Capacity": The capacity of the cell divided by the area of the cell if area provided
+    - "Specific Current": The current of the cell divided by the mass of the cell if mass provided
+    - "Areal Current": The current of the cell divided by the area of the cell if area provided
+    - "Specific Power": The power of the cell divided by the mass of the cell if mass provided
+    - "Areal Power": The power of the cell divided by the area of the cell if area provided
     
     From these measurements, everything you want to know about the electrochemistry can be calculated.
     
@@ -150,6 +164,20 @@ def echem_file_loader(filepath, mass=None, area=None):
         print(extension)
         raise RuntimeError("Filetype {extension=} not recognised.")
 
+    df_post_process(df)
+
+    return df
+
+def df_post_process(df, mass=None, area=None):
+    """
+    Adds columns to an imported dataframe for full cycles, power, and areal/specific versions of capacity, current, and power.
+
+    Args:
+        df (pandas.DataFrame): The input DataFrame containing the imported data.
+
+    Returns:
+        pandas.DataFrame: The processed DataFrame with processed columns.
+    """
     # Adding a full cycle column
     # 1 full cycle is charge then discharge; code considers which the test begins with
     if "half cycle" in df.columns:
@@ -163,15 +191,23 @@ def echem_file_loader(filepath, mass=None, area=None):
         else:
             raise Exception('Unexpected state in the first data point of half cycle 1.')
 
-    # Adding specific capacity and current density columns if mass and area are provided
+    # Adding a power column
+    if 'Current' and 'Voltage' in df.columns:
+        df['Power'] = df['Current']*df['Voltage']
+
+    # Adding mass- and area-normalized columns if mass and area are provided
     if mass:
         df['Specific Capacity'] = df['Capacity']/mass
     if area:
-        df['Specific Capacity (Area)'] = df['Capacity']/area
+        df['Areal Capacity'] = df['Capacity']/area
     if mass and 'Current' in df.columns:
         df['Specific Current'] = df['Current']/mass
     if area and 'Current' in df.columns:
-        df['Current Density'] = df['Current']/area
+        df['Areal Current'] = df['Current']/area
+    if mass and 'Power' in df.columns:
+        df['Specific Power'] = df['Power']/mass
+    if area and 'Power' in df.columns:
+        df['Areal Power'] = df['Power']/area
 
     return df
 
@@ -563,10 +599,13 @@ def cycle_summary(df, current_label=None):
     - 'CE': The charge efficiency for the cycle (Discharge Capacity/Charge Capacity)
     - 'Specific Discharge Capacity': The maximum specific discharge capacity for the cycle
     - 'Specific Charge Capacity': The maximum specific charge capacity for the cycle
-    - 'Specific Discharge Capacity (Area)': The maximum specific discharge capacity for the cycle
-    - 'Specific Charge Capacity (Area)': The maximum specific charge capacity for the cycle
+    - 'Areal Discharge Capacity': The maximum specific discharge capacity for the cycle
+    - 'Areal Charge Capacity': The maximum specific charge capacity for the cycle
     - 'Average Discharge Voltage': The average discharge voltage for the cycle
     - 'Average Charge Voltage': The average charge voltage for the cycle
+    - 'Discharge Energy': The integral energy on discharge for the cycle
+    - 'Charge Energy': The integral energy of charge for the cycle
+    - 
     
     Args:
         df (pandas.DataFrame): The input DataFrame containing the data.
@@ -611,27 +650,32 @@ def cycle_summary(df, current_label=None):
         summary_df.loc[dis_index, 'Specific Discharge Capacity'] = df[dis_mask].groupby('full cycle')['Specific Capacity'].max()
         summary_df.loc[cha_index, 'Specific Charge Capacity'] = df[cha_mask].groupby('full cycle')['Specific Capacity'].max()
 
-    if 'Specific Capacity (Area)' in df.columns:
-        summary_df.loc[dis_index, 'Specific Discharge Capacity (Area)'] = df[dis_mask].groupby('full cycle')['Specific Capacity (Area)'].max()
-        summary_df.loc[cha_index, 'Specific Charge Capacity (Area)'] = df[cha_mask].groupby('full cycle')['Specific Capacity (Area)'].max()
+    if 'Areal Specific Capacity' in df.columns:
+        summary_df.loc[dis_index, 'Areal Discharge Capacity'] = df[dis_mask].groupby('full cycle')['Areal Specific Capacity'].max()
+        summary_df.loc[cha_index, 'Areal Charge Capacity'] = df[cha_mask].groupby('full cycle')['Areal Specific Capacity'].max()
 
-
-    def average_voltage(capacity, voltage):
-        return np.trapz(voltage, capacity)/max(capacity)
+    def energy_integral(capacity, voltage):
+        return np.trapz(voltage, capacity)
 
     dis_cycles = df.loc[df.index[dis_mask]]['half cycle'].unique()
-    for cycle in dis_cycles:
-        mask = df['half cycle'] == cycle
-        avg_vol = average_voltage(df['Capacity'][mask], df['Voltage'][mask])
+    for halfcycle in dis_cycles:
+        mask = df['half cycle'] == halfcycle
+        cycle = df['full cycle'][mask].iloc[0] # Full cycle corresponding with this half cycle
+        energy = energy_integral(df[mask]['Capacity'], df[mask]['Voltage'])
         # Add an entry to the summary for each full cycle
-        summary_df.loc[df['full cycle'][mask].iloc[0], 'Average Discharge Voltage'] = avg_vol
+        summary_df.loc[cycle, 'Discharge Energy'] = energy
 
     cha_cycles = df.loc[df.index[cha_mask]]['half cycle'].unique()
-    for cycle in cha_cycles:
-        mask = df['half cycle'] == cycle
-        avg_vol = average_voltage(df['Capacity'][mask], df['Voltage'][mask])
+    for halfcycle in cha_cycles:
+        mask = df['half cycle'] == halfcycle
+        cycle = df['full cycle'][mask].iloc[0] # Full cycle corresponding with this half cycle
+        energy = energy_integral(df[mask]['Capacity'], df[mask]['Voltage'])
         # Add an entry to the summary for each full cycle
-        summary_df.loc[df['full cycle'][mask].iloc[0], 'Average Charge Voltage'] = avg_vol
+        summary_df.loc[cycle, 'Charge Energy'] = energy
+    
+    summary_df['Average Discharge Voltage'] = summary_df['Discharge Energy']/summary_df['Discharge Capacity']
+    summary_df['Average Charge Voltage'] = summary_df['Charge Energy']/summary_df['Charge Capacity']
+
     return summary_df
 
 def halfcycles_from_cycle(df, cycle):
@@ -646,8 +690,7 @@ def halfcycles_from_cycle(df, cycle):
     """
     try:
         mask = df['full cycle'] == cycle
-        halfcycles = list(df['half cycle'][mask].unique())
-        return halfcycles
+        return list(df['half cycle'][mask].unique())
     except TypeError:
         print("Invalid type for cycle number.")
 
