@@ -174,6 +174,8 @@ def df_post_process(df, mass=None, area=None):
 
     Args:
         df (pandas.DataFrame): The input DataFrame containing the imported data.
+        mass (float): Mass (in mg) to normalize by for specific values
+        area (float): Area (in cm^2) to normalize by for areal values
 
     Returns:
         pandas.DataFrame: The processed DataFrame with processed columns.
@@ -197,15 +199,15 @@ def df_post_process(df, mass=None, area=None):
 
     # Adding mass- and area-normalized columns if mass and area are provided
     if mass:
-        df['Specific Capacity'] = df['Capacity']/mass
+        df['Specific Capacity'] = 1000*df['Capacity']/mass
     if area:
         df['Areal Capacity'] = df['Capacity']/area
     if mass and 'Current' in df.columns:
-        df['Specific Current'] = df['Current']/mass
+        df['Specific Current'] = 1000*df['Current']/mass
     if area and 'Current' in df.columns:
         df['Areal Current'] = df['Current']/area
     if mass and 'Power' in df.columns:
-        df['Specific Power'] = df['Power']/mass
+        df['Specific Power'] = 1000*df['Power']/mass
     if area and 'Power' in df.columns:
         df['Areal Power'] = df['Power']/area
 
@@ -698,7 +700,7 @@ def halfcycles_from_cycle(df, cycle):
 PLOTTING
 """
 
-def charge_discharge_plot(df, cycles, colormap=None):
+def charge_discharge_plot(df, cycles, colormap=None, norm=None):
     """
     Function for plotting individual or multi but discrete charge discharge cycles
 
@@ -706,6 +708,7 @@ def charge_discharge_plot(df, cycles, colormap=None):
         df (DataFrame): The input dataframe containing the data for plotting.
         full_cycle (int or list of ints): The full cycle number(s) to plot. If an integer is provided, a single cycle will be plotted (charge and discharge). If a list is provided, multiple cycles will be plotted.
         colormap (str, optional): The colormap to use for coloring the cycles. If not provided, a default colormap will be used based on the number of cycles.
+        norm (str, optional): Normalization by 'area' or 'mass', if desired.
 
     Returns:
         fig (Figure): The matplotlib Figure object.
@@ -717,6 +720,19 @@ def charge_discharge_plot(df, cycles, colormap=None):
     """
     fig, ax = plt.subplots()
 
+    # Determine type of capacity to plot, based on value of arg norm
+    if norm is None:
+        capacity_col = 'Capacity'
+        capacity_label = 'Capacity / mAh'
+    elif norm == 'area' and 'Areal Capacity' in df.columns:
+        capacity_col = 'Areal Capacity'
+        capacity_label = 'Areal Capacity / mAh/cm$^2$'
+    elif norm == 'mass' and 'Specific Capacity' in df.columns:
+        capacity_col = 'Specific Capacity'
+        capacity_label = 'Specific Capacity / mAh/g'
+    else:
+        print("Invalid argument for norm or required column not present in df.")
+
     try:
         iter(cycles)
 
@@ -726,9 +742,9 @@ def charge_discharge_plot(df, cycles, colormap=None):
             mask = df['half cycle'] == halfcycle
             # Making sure half cycle exists within the data
             if sum(mask) > 0:
-                ax.plot(df['Capacity'][mask], df['Voltage'][mask])
+                ax.plot(df[capacity_col][mask], df['Voltage'][mask])
 
-        ax.set_xlabel('Capacity / mAh')
+        ax.set_xlabel(capacity_label)
         ax.set_ylabel('Voltage / V')
         return fig, ax
 
@@ -747,39 +763,48 @@ def charge_discharge_plot(df, cycles, colormap=None):
             mask = df['half cycle'] == halfcycle
             # Making sure half cycle exists within the data
             if sum(mask) > 0:
-                ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(count))
+                ax.plot(df[capacity_col][mask], df['Voltage'][mask], color=cm(count))
 
     from matplotlib.lines import Line2D
     custom_lines = [Line2D([0], [0], color=cm(count), lw=2) for count, _ in enumerate(cycles)]
 
     ax.legend(custom_lines, [f'Cycle {i}' for i in cycles])
-    ax.set_xlabel('Capacity / mAh')
+    ax.set_xlabel(capacity_label)
     ax.set_ylabel('Voltage / V')
     return fig, ax
 
-def multi_cycle_plot(df, cycles, colormap='viridis'):
+def multi_cycle_plot(df, cycles, colormap='viridis', norm=None):
     """
     Function for plotting continuously coloured cycles (useful for large numbers).
 
     Parameters:
-    - df: DataFrame
-        The input DataFrame containing the data to be plotted.
-    - cycles: list or array-like
-        A list of full cycle numbers to be plotted.
-    - colormap: str, optional
-        The name of the colormap to be used for coloring the cycles. Default is 'viridis'.
+        df (DataFrame): The input DataFrame containing the data to be plotted.
+        cycles (list or array-like): A list of full cycle numbers to be plotted.
+        colormap (str, optional): The name of the colormap to be used for coloring the cycles. Default is 'viridis'.
+        norm (str, optional): Normalization by 'area' or 'mass', if desired.
 
     Returns:
-    - fig: matplotlib.figure.Figure
-        The generated figure object.
-    - ax: matplotlib.axes.Axes
-        The generated axes object.
+        fig (matplotlib.figure.Figure): The generated figure object.
+        ax (matplotlib.axes.Axes): The generated axes object.
     """
 
     import matplotlib.pyplot as plt
     import matplotlib.cm as cm
     from matplotlib.colors import Normalize
     import numpy as np
+
+    # Determine type of capacity to plot, based on value of arg norm
+    if norm is None:
+        capacity_col = 'Capacity'
+        capacity_label = 'Capacity / mAh'
+    elif norm == 'area' and 'Areal Capacity' in df.columns:
+        capacity_col = 'Areal Capacity'
+        capacity_label = 'Areal Capacity / mAh/cm$^2$'
+    elif norm == 'mass' and 'Specific Capacity' in df.columns:
+        capacity_col = 'Specific Capacity'
+        capacity_label = 'Specific Capacity / mAh/g'
+    else:
+        print("Invalid argument for norm or required column not present in df.")
 
     fig, ax = plt.subplots()
     cm = plt.get_cmap(colormap)
@@ -790,12 +815,12 @@ def multi_cycle_plot(df, cycles, colormap='viridis'):
         halfcycles = halfcycles_from_cycle(df, cycle)
         for halfcycle in halfcycles:
             mask = df['half cycle'] == halfcycle
-            ax.plot(df['Capacity'][mask], df['Voltage'][mask], color=cm(norm(cycle)))
+            ax.plot(df[capacity_col][mask], df['Voltage'][mask], color=cm(norm(cycle)))
 
     cbar = fig.colorbar(sm, ax=plt.gca())
     cbar.set_label('Cycle', rotation=270, labelpad=10)
     ax.set_ylabel('Voltage / V')
-    ax.set_xlabel('Capacity / mAh')
+    ax.set_xlabel(capacity_label)
     return fig, ax
 
 def multi_dqdv_plot(df, cycles, colormap='viridis', 
@@ -810,22 +835,22 @@ def multi_dqdv_plot(df, cycles, colormap='viridis',
     Uses the internal dqdv_single_cycle function to calculate the dQ/dV curves.
 
     Parameters:
-    - df: DataFrame containing the data.
-    - cycles: List or array-like object of cycle numbers to plot.
-    - colormap: Name of the colormap to use (default: 'viridis').
-    - capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
-    - voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
-    - polynomial_spline (int, optional): Order of the spline interpolation for the capacity-voltage curve. Defaults to 3. Best results use odd numbers.
-    - s_spline (float, optional): Smoothing factor for the spline interpolation. Defaults to 1e-5.
-    - polyorder_1 (int, optional): Order of the polynomial for the first smoothing filter (Before spline fitting). Defaults to 5. Best results use odd numbers.
-    - window_size_1 (int, optional): Size of the window for the first smoothing filter. (Before spline fitting). Defaults to 101. Must be odd.
-    - polyorder_2 (int, optional): Order of the polynomial for the second optional smoothing filter. Defaults to 5. (After spline fitting and differentiation). Best results use odd numbers.
-    - window_size_2 (int, optional): Size of the window for the second optional smoothing filter. Defaults to 1001. (After spline fitting and differentiation). Must be odd.
-    - final_smooth (bool, optional): Whether to apply final smoothing to the dq/dv curve. Defaults to True.
+        df: DataFrame containing the data.
+        cycles: List or array-like object of cycle numbers to plot.
+        colormap: Name of the colormap to use (default: 'viridis').
+        capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
+        voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
+        polynomial_spline (int, optional): Order of the spline interpolation for the capacity-voltage curve. Defaults to 3. Best results use odd numbers.
+        s_spline (float, optional): Smoothing factor for the spline interpolation. Defaults to 1e-5.
+        polyorder_1 (int, optional): Order of the polynomial for the first smoothing filter (Before spline fitting). Defaults to 5. Best results use odd numbers.
+        window_size_1 (int, optional): Size of the window for the first smoothing filter. (Before spline fitting). Defaults to 101. Must be odd.
+        polyorder_2 (int, optional): Order of the polynomial for the second optional smoothing filter. Defaults to 5. (After spline fitting and differentiation). Best results use odd numbers.
+        window_size_2 (int, optional): Size of the window for the second optional smoothing filter. Defaults to 1001. (After spline fitting and differentiation). Must be odd.
+        final_smooth (bool, optional): Whether to apply final smoothing to the dq/dv curve. Defaults to True.
 
     Returns:
-    - fig: The matplotlib figure object.
-    - ax: The matplotlib axes object.
+        fig: The matplotlib figure object.
+        ax: The matplotlib axes object.
 
     """
     import matplotlib.pyplot as plt
@@ -870,22 +895,22 @@ def multi_dqdv_plot(df, cycles, colormap='viridis',
 #     Uses the internal dqdv_single_cycle function to calculate the dQ/dV curves.
 
 #     Parameters:
-#     - df: DataFrame containing the data.
-#     - cycles: List or array-like object of cycle numbers (half cycles) to plot.
-#     - colormap: Name of the colormap to use (default: 'viridis').
-#     - capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
-#     - voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
-#     - polynomial_spline (int, optional): Order of the spline interpolation for the capacity-voltage curve. Defaults to 3. Best results use odd numbers.
-#     - s_spline (float, optional): Smoothing factor for the spline interpolation. Defaults to 1e-5.
-#     - polyorder_1 (int, optional): Order of the polynomial for the first smoothing filter (Before spline fitting). Defaults to 5. Best results use odd numbers.
-#     - window_size_1 (int, optional): Size of the window for the first smoothing filter. (Before spline fitting). Defaults to 101. Must be odd.
-#     - polyorder_2 (int, optional): Order of the polynomial for the second optional smoothing filter. Defaults to 5. (After spline fitting and differentiation). Best results use odd numbers.
-#     - window_size_2 (int, optional): Size of the window for the second optional smoothing filter. Defaults to 1001. (After spline fitting and differentiation). Must be odd.
-#     - final_smooth (bool, optional): Whether to apply final smoothing to the dq/dv curve. Defaults to True.
+#         df: DataFrame containing the data.
+#         cycles: List or array-like object of cycle numbers (half cycles) to plot.
+#         colormap: Name of the colormap to use (default: 'viridis').
+#         capacity_label: Label of the capacity column in the DataFrame (default: 'Capacity').
+#         voltage_label: Label of the voltage column in the DataFrame (default: 'Voltage').
+#         polynomial_spline (int, optional): Order of the spline interpolation for the capacity-voltage curve. Defaults to 3. Best results use odd numbers.
+#         s_spline (float, optional): Smoothing factor for the spline interpolation. Defaults to 1e-5.
+#         polyorder_1 (int, optional): Order of the polynomial for the first smoothing filter (Before spline fitting). Defaults to 5. Best results use odd numbers.
+#         window_size_1 (int, optional): Size of the window for the first smoothing filter. (Before spline fitting). Defaults to 101. Must be odd.
+#         polyorder_2 (int, optional): Order of the polynomial for the second optional smoothing filter. Defaults to 5. (After spline fitting and differentiation). Best results use odd numbers.
+#         window_size_2 (int, optional): Size of the window for the second optional smoothing filter. Defaults to 1001. (After spline fitting and differentiation). Must be odd.
+#         final_smooth (bool, optional): Whether to apply final smoothing to the dq/dv curve. Defaults to True.
 
 #     Returns:
-#     - fig: The matplotlib figure object.
-#     - ax: The matplotlib axes object.
+#         fig: The matplotlib figure object.
+#         ax: The matplotlib axes object.
 
 #     """
 #     import matplotlib.pyplot as plt
